@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Code Review Bot — System Architecture</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-deep: #070a12;
+      --bg-panel: #0d121f;
+      --bg-card: #12192a;
+      --border: rgba(148, 163, 184, 0.12);
+      --text: #e8edf7;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --github: #22c55e;
+      --github-dim: rgba(34, 197, 94, 0.15);
+      --ai: #a855f7;
+      --ai-dim: rgba(168, 85, 247, 0.15);
+      --infra: #3b82f6;
+      --infra-dim: rgba(59, 130, 246, 0.15);
+      --frontend: #f97316;
+      --frontend-dim: rgba(249, 115, 22, 0.15);
+      --glow-github: rgba(34, 197, 94, 0.45);
+      --glow-ai: rgba(168, 85, 247, 0.45);
+      --glow-infra: rgba(59, 130, 246, 0.45);
+      --glow-frontend: rgba(249, 115, 22, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg-deep);
+      color: var(--text);
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    .noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.04;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      z-index: 0;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: clamp(1rem, 3vw, 2.5rem);
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 1.75rem;
+    }
+
+    h1 {
+      font-family: "Syne", sans-serif;
+      font-weight: 800;
+      font-size: clamp(1.65rem, 4vw, 2.35rem);
+      letter-spacing: -0.03em;
+      margin: 0 0 0.35rem;
+      background: linear-gradient(135deg, #f8fafc 0%, #94a3b8 55%, #38bdf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.95rem;
+      max-width: 52ch;
+      margin: 0 auto;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr minmax(260px, 320px);
+      gap: 1.25rem;
+      align-items: start;
+    }
+
+    @media (max-width: 1024px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .diagram-card {
+      background: linear-gradient(165deg, var(--bg-panel) 0%, #0a0e18 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1rem;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .diagram-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+    }
+
+    .flow-path {
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      opacity: 0.55;
+    }
+
+    .flow-path.dash {
+      stroke-dasharray: 8 6;
+      animation: dash-shift 14s linear infinite;
+    }
+
+    @keyframes dash-shift {
+      to {
+        stroke-dashoffset: -200;
+      }
+    }
+
+    .flow-dot {
+      filter: drop-shadow(0 0 4px currentColor);
+    }
+
+    .node {
+      cursor: pointer;
+      transition: transform 0.22s ease, filter 0.22s ease;
+    }
+
+    .node:hover {
+      transform: translateY(-2px);
+      filter: brightness(1.08);
+    }
+
+    .node:focus {
+      outline: none;
+    }
+
+    .node:focus-visible rect {
+      stroke: #38bdf8;
+      stroke-width: 2px;
+    }
+
+    .node rect,
+    .node path.card-bg {
+      transition: stroke 0.2s ease, fill 0.2s ease;
+    }
+
+    .node.github:hover rect,
+    .node.github:hover path.card-bg {
+      stroke: var(--github);
+      filter: drop-shadow(0 0 12px var(--glow-github));
+    }
+
+    .node.ai:hover rect,
+    .node.ai:hover path.card-bg {
+      stroke: var(--ai);
+      filter: drop-shadow(0 0 12px var(--glow-ai));
+    }
+
+    .node.infra:hover rect,
+    .node.infra:hover path.card-bg {
+      stroke: var(--infra);
+      filter: drop-shadow(0 0 12px var(--glow-infra));
+    }
+
+    .node.frontend:hover rect,
+    .node.frontend:hover path.card-bg {
+      stroke: var(--frontend);
+      filter: drop-shadow(0 0 12px var(--glow-frontend));
+    }
+
+    .node-label {
+      font-family: "Syne", sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      fill: var(--text);
+      pointer-events: none;
+    }
+
+    .node-sublabel {
+      font-family: "DM Sans", sans-serif;
+      font-size: 8.5px;
+      fill: var(--muted);
+      pointer-events: none;
+    }
+
+    .zone-label {
+      font-family: "Syne", sans-serif;
+      font-weight: 700;
+      font-size: 10px;
+      fill: var(--muted);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.75;
+    }
+
+    .legend {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem 1.25rem;
+    }
+
+    .legend h2 {
+      font-family: "Syne", sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin: 0 0 0.85rem;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .legend-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    .swatch.github {
+      background: var(--github);
+      box-shadow: 0 0 10px var(--glow-github);
+    }
+
+    .swatch.ai {
+      background: var(--ai);
+      box-shadow: 0 0 10px var(--glow-ai);
+    }
+
+    .swatch.infra {
+      background: var(--infra);
+      box-shadow: 0 0 10px var(--glow-infra);
+    }
+
+    .swatch.frontend {
+      background: var(--frontend);
+      box-shadow: 0 0 10px var(--glow-frontend);
+    }
+
+    .detail-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem 1.2rem;
+      min-height: 200px;
+      position: sticky;
+      top: 1rem;
+    }
+
+    .detail-panel h3 {
+      font-family: "Syne", sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      margin: 0 0 0.5rem;
+      color: var(--text);
+    }
+
+    .detail-panel .badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      margin-bottom: 0.65rem;
+    }
+
+    .detail-panel .badge.github {
+      background: var(--github-dim);
+      color: var(--github);
+    }
+
+    .detail-panel .badge.ai {
+      background: var(--ai-dim);
+      color: var(--ai);
+    }
+
+    .detail-panel .badge.infra {
+      background: var(--infra-dim);
+      color: var(--infra);
+    }
+
+    .detail-panel .badge.frontend {
+      background: var(--frontend-dim);
+      color: var(--frontend);
+    }
+
+    .detail-panel p {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .detail-panel .hint {
+      margin-top: 1rem;
+      font-size: 0.75rem;
+      color: #64748b;
+      border-top: 1px solid var(--border);
+      padding-top: 0.75rem;
+    }
+
+    .flow-note {
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      background: rgba(56, 189, 248, 0.06);
+      border: 1px solid rgba(56, 189, 248, 0.15);
+      border-radius: 10px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .flow-note strong {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .parallel-tag {
+      font-size: 7.5px;
+      fill: var(--ai);
+      font-family: "DM Sans", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    defs marker#arrowGreen polyline,
+    defs marker#arrowBlue polyline,
+    defs marker#arrowPurple polyline,
+    defs marker#arrowOrange polyline {
+      stroke-linejoin: round;
+    }
+  </style>
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="wrap">
+    <header>
+      <h1>AI Code Review Bot — System Architecture</h1>
+      <p class="subtitle">End-to-end flow from GitHub webhooks through parallel Claude agents to inline PR feedback, persistence, and real-time dashboard updates.</p>
+    </header>
+
+    <div class="layout">
+      <div class="diagram-card">
+        <svg class="diagram-svg" viewBox="0 0 1200 920" role="img" aria-label="System architecture diagram">
+          <defs>
+            <linearGradient id="gridGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#1e293b;stop-opacity:0.25" />
+              <stop offset="100%" style="stop-color:#0f172a;stop-opacity:0.08" />
+            </linearGradient>
+            <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation="1.2" result="b" />
+              <feMerge>
+                <feMergeNode in="b" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <polygon points="0 0, 8 4, 0 8" fill="#22c55e" />
+            </marker>
+            <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <polygon points="0 0, 8 4, 0 8" fill="#3b82f6" />
+            </marker>
+            <marker id="arrowPurple" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <polygon points="0 0, 8 4, 0 8" fill="#a855f7" />
+            </marker>
+            <marker id="arrowOrange" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <polygon points="0 0, 8 4, 0 8" fill="#f97316" />
+            </marker>
+          </defs>
+
+          <rect width="1200" height="920" fill="url(#gridGrad)" rx="12" />
+
+          <text class="zone-label" x="40" y="36">Ingress &amp; API</text>
+          <text class="zone-label" x="40" y="300">Processing</text>
+          <text class="zone-label" x="40" y="560">Output &amp; clients</text>
+
+          <!-- Paths: main flow -->
+          <path id="path-dev-gh" class="flow-path" stroke="#22c55e" marker-end="url(#arrowGreen)" d="M 120 118 L 248 118" />
+          <path id="path-gh-ngrok" class="flow-path dash" stroke="#22c55e" d="M 380 148 L 380 168" />
+          <path id="path-ngrok-api" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 380 218 L 380 248 L 520 248" />
+          <path id="path-api-redis" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 640 248 L 720 248" />
+          <path id="path-api-celery" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 580 278 L 580 338" />
+          <path id="path-celery-worker" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 580 398 L 580 448" />
+          <path id="path-worker-ghapi" class="flow-path" stroke="#22c55e" marker-end="url(#arrowGreen)" d="M 520 478 L 420 478 L 420 548" />
+          <path id="path-ghapi-worker" class="flow-path" stroke="#22c55e" marker-end="url(#arrowGreen)" d="M 420 598 L 420 478 L 520 478" />
+          <path id="path-worker-agents" class="flow-path" stroke="#a855f7" marker-end="url(#arrowPurple)" d="M 640 478 L 700 478" />
+          <path id="path-agents-agg" class="flow-path" stroke="#a855f7" marker-end="url(#arrowPurple)" d="M 900 538 L 900 548" />
+          <path id="path-agg-ghpost" class="flow-path" stroke="#22c55e" marker-end="url(#arrowGreen)" d="M 840 573 L 420 573 L 420 618" />
+          <path id="path-agg-pg" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 900 598 L 900 688" />
+          <path id="path-pg-redisps" class="flow-path" stroke="#3b82f6" marker-end="url(#arrowBlue)" d="M 960 713 L 980 713" />
+          <path id="path-redisps-dash" class="flow-path" stroke="#f97316" marker-end="url(#arrowOrange)" d="M 1040 688 L 1040 598 L 1080 598" />
+
+          <!-- Secondary: comment flow -->
+          <path id="path-comment-flow" class="flow-path dash" stroke="#22c55e" opacity="0.5" d="M 248 160 L 248 248 L 520 248" />
+          <text x="255" y="200" fill="#64748b" font-size="8" font-family="DM Sans,sans-serif">review_comment webhook</text>
+
+          <!-- Animated dots -->
+          <circle class="flow-dot" r="4" fill="#22c55e">
+            <animateMotion dur="2.2s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-dev-gh" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#4ade80">
+            <animateMotion dur="2.5s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-gh-ngrok" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="4" fill="#60a5fa">
+            <animateMotion dur="2.8s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-ngrok-api" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#60a5fa">
+            <animateMotion dur="3s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-api-redis" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#60a5fa">
+            <animateMotion dur="2.4s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-api-celery" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#60a5fa">
+            <animateMotion dur="2.6s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-celery-worker" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#4ade80">
+            <animateMotion dur="3.2s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-worker-ghapi" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#4ade80">
+            <animateMotion dur="2.9s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-ghapi-worker" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="2.5" fill="#86efac">
+            <animateMotion dur="4s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-comment-flow" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="4" fill="#c084fc">
+            <animateMotion dur="2.7s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-worker-agents" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#c084fc">
+            <animateMotion dur="2.5s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-agents-agg" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#4ade80">
+            <animateMotion dur="2.8s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-agg-ghpost" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#60a5fa">
+            <animateMotion dur="2.3s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-agg-pg" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#60a5fa">
+            <animateMotion dur="2.6s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-pg-redisps" />
+            </animateMotion>
+          </circle>
+          <circle class="flow-dot" r="3" fill="#fb923c">
+            <animateMotion dur="3.1s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path-redisps-dash" />
+            </animateMotion>
+          </circle>
+
+          <!-- Developer -->
+          <g class="node github" data-id="developer" transform="translate(40,88)">
+            <rect width="160" height="60" rx="10" fill="#0f172a" stroke="#166534" stroke-width="1.5" />
+            <text class="node-label" x="80" y="28" text-anchor="middle">Developer</text>
+            <text class="node-sublabel" x="80" y="44" text-anchor="middle">Opens Pull Request</text>
+          </g>
+
+          <!-- GitHub -->
+          <g class="node github" data-id="github" transform="translate(248,88)">
+            <rect width="132" height="60" rx="10" fill="#0f172a" stroke="#166534" stroke-width="1.5" />
+            <text class="node-label" x="66" y="28" text-anchor="middle">GitHub</text>
+            <text class="node-sublabel" x="66" y="44" text-anchor="middle">Webhooks · PRs</text>
+          </g>
+
+          <!-- ngrok -->
+          <g class="node infra" data-id="ngrok" transform="translate(332,168)">
+            <rect width="96" height="50" rx="8" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="48" y="24" text-anchor="middle">ngrok</text>
+            <text class="node-sublabel" x="48" y="38" text-anchor="middle">dev tunnel</text>
+          </g>
+
+          <!-- FastAPI -->
+          <g class="node infra" data-id="fastapi" transform="translate(520,218)">
+            <rect width="120" height="60" rx="10" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="60" y="26" text-anchor="middle">FastAPI</text>
+            <text class="node-sublabel" x="60" y="42" text-anchor="middle">HMAC · queue</text>
+          </g>
+
+          <!-- Redis idempotency -->
+          <g class="node infra" data-id="redis-idem" transform="translate(720,218)">
+            <rect width="130" height="60" rx="10" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="65" y="24" text-anchor="middle">Redis</text>
+            <text class="node-sublabel" x="65" y="38" text-anchor="middle">Idempotency</text>
+            <text class="node-sublabel" x="65" y="50" text-anchor="middle">X-GitHub-Delivery</text>
+          </g>
+
+          <!-- Celery -->
+          <g class="node infra" data-id="celery" transform="translate(520,338)">
+            <rect width="120" height="60" rx="10" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="60" y="26" text-anchor="middle">Celery</text>
+            <text class="node-sublabel" x="60" y="42" text-anchor="middle">Redis broker</text>
+          </g>
+
+          <!-- Worker -->
+          <g class="node infra" data-id="worker" transform="translate(520,448)">
+            <rect width="120" height="60" rx="10" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="60" y="26" text-anchor="middle">Worker</text>
+            <text class="node-sublabel" x="60" y="42" text-anchor="middle">JWT → token · diff</text>
+          </g>
+
+          <!-- GitHub API fetch -->
+          <g class="node github" data-id="gh-api-read" transform="translate(332,548)">
+            <rect width="176" height="50" rx="8" fill="#0f172a" stroke="#166534" stroke-width="1.5" />
+            <text class="node-label" x="88" y="24" text-anchor="middle">GitHub API</text>
+            <text class="node-sublabel" x="88" y="38" text-anchor="middle">Fetch PR diff</text>
+          </g>
+
+          <!-- 4 Agents -->
+          <g class="node ai" data-id="agent1" transform="translate(700,458)">
+            <rect width="88" height="80" rx="8" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5" />
+            <text class="node-label" x="44" y="22" text-anchor="middle">Agent 1</text>
+            <text class="node-sublabel" x="44" y="36" text-anchor="middle">Colors &amp;</text>
+            <text class="node-sublabel" x="44" y="48" text-anchor="middle">constants</text>
+            <text class="parallel-tag" x="44" y="68" text-anchor="middle">PARALLEL</text>
+          </g>
+          <g class="node ai" data-id="agent2" transform="translate(796,458)">
+            <rect width="88" height="80" rx="8" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5" />
+            <text class="node-label" x="44" y="22" text-anchor="middle">Agent 2</text>
+            <text class="node-sublabel" x="44" y="36" text-anchor="middle">Logic &amp;</text>
+            <text class="node-sublabel" x="44" y="48" text-anchor="middle">bugs</text>
+            <text class="parallel-tag" x="44" y="68" text-anchor="middle">PARALLEL</text>
+          </g>
+          <g class="node ai" data-id="agent3" transform="translate(892,458)">
+            <rect width="88" height="80" rx="8" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5" />
+            <text class="node-label" x="44" y="22" text-anchor="middle">Agent 3</text>
+            <text class="node-sublabel" x="44" y="36" text-anchor="middle">Best</text>
+            <text class="node-sublabel" x="44" y="48" text-anchor="middle">practices</text>
+            <text class="parallel-tag" x="44" y="68" text-anchor="middle">PARALLEL</text>
+          </g>
+          <g class="node ai" data-id="agent4" transform="translate(988,458)">
+            <rect width="88" height="80" rx="8" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5" />
+            <text class="node-label" x="44" y="22" text-anchor="middle">Agent 4</text>
+            <text class="node-sublabel" x="44" y="36" text-anchor="middle">Security</text>
+            <text class="node-sublabel" x="44" y="48" text-anchor="middle">OWASP</text>
+            <text class="parallel-tag" x="44" y="68" text-anchor="middle">PARALLEL</text>
+          </g>
+
+          <!-- Claude parent label -->
+          <text x="888" y="448" class="node-sublabel" text-anchor="middle" style="font-size:9px;fill:#94a3b8">Claude / Anthropic</text>
+
+          <!-- Aggregator -->
+          <g class="node ai" data-id="aggregator" transform="translate(840,548)">
+            <rect width="120" height="50" rx="8" fill="#0f172a" stroke="#7c3aed" stroke-width="1.5" />
+            <text class="node-label" x="60" y="24" text-anchor="middle">Aggregator</text>
+            <text class="node-sublabel" x="60" y="38" text-anchor="middle">Dedupe · rank</text>
+          </g>
+
+          <!-- GitHub API post -->
+          <g class="node github" data-id="gh-api-write" transform="translate(332,618)">
+            <rect width="176" height="50" rx="8" fill="#0f172a" stroke="#166534" stroke-width="1.5" />
+            <text class="node-label" x="88" y="24" text-anchor="middle">GitHub API</text>
+            <text class="node-sublabel" x="88" y="38" text-anchor="middle">Inline review comments</text>
+          </g>
+
+          <!-- PostgreSQL -->
+          <g class="node infra" data-id="postgres" transform="translate(840,688)">
+            <rect width="120" height="50" rx="8" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="60" y="24" text-anchor="middle">PostgreSQL</text>
+            <text class="node-sublabel" x="60" y="38" text-anchor="middle">Supabase</text>
+          </g>
+
+          <!-- Redis pubsub (beside Postgres to avoid overlap) -->
+          <g class="node infra" data-id="redis-pubsub" transform="translate(980,688)">
+            <rect width="120" height="50" rx="8" fill="#0f172a" stroke="#1d4ed8" stroke-width="1.5" />
+            <text class="node-label" x="60" y="22" text-anchor="middle">Redis Pub/Sub</text>
+            <text class="node-sublabel" x="60" y="36" text-anchor="middle">Notifications</text>
+          </g>
+
+          <!-- Next.js -->
+          <g class="node frontend" data-id="nextjs" transform="translate(1000,568)">
+            <rect width="160" height="60" rx="10" fill="#0f172a" stroke="#c2410c" stroke-width="1.5" />
+            <text class="node-label" x="80" y="26" text-anchor="middle">Next.js</text>
+            <text class="node-sublabel" x="80" y="42" text-anchor="middle">Dashboard · SSE</text>
+          </g>
+
+          <!-- Senior dev flow box -->
+          <g class="node github" data-id="senior-flow" transform="translate(40,800)">
+            <rect width="1120" height="72" rx="12" fill="rgba(15,23,42,0.6)" stroke="#166534" stroke-width="1" stroke-dasharray="6 4" />
+            <text class="node-label" x="560" y="28" text-anchor="middle">Secondary flow — Human review comment</text>
+            <text class="node-sublabel" x="560" y="48" text-anchor="middle">Senior posts PR comment → webhook → FastAPI → Celery → Claude (guidance + fix prompt) → reply on GitHub thread</text>
+            <text class="node-sublabel" x="560" y="62" text-anchor="middle">Shares the same webhook ingress, verification, and worker pipeline as PR events</text>
+          </g>
+
+        </svg>
+        <p class="flow-note"><strong>Data shape:</strong> Each agent returns structured JSON with an <code style="color:#cbd5e1">issues[]</code> array: file, line, severity, category, description, suggested_fix, fix_prompt. The aggregator merges, deduplicates, and ranks by severity before batch posting to the PR.</p>
+      </div>
+
+      <aside>
+        <div class="legend">
+          <h2>Legend</h2>
+          <div class="legend-row"><span class="swatch github"></span> GitHub &amp; API surfaces</div>
+          <div class="legend-row"><span class="swatch ai"></span> Claude AI agents &amp; aggregation</div>
+          <div class="legend-row"><span class="swatch infra"></span> FastAPI, Redis, Celery, PostgreSQL</div>
+          <div class="legend-row"><span class="swatch frontend"></span> Next.js dashboard</div>
+        </div>
+        <div class="detail-panel" id="detailPanel" aria-live="polite">
+          <h3 id="detailTitle">Select a component</h3>
+          <span class="badge infra" id="detailBadge">Info</span>
+          <p id="detailText">Click any box in the diagram to see a description of that part of the system. Animated dots show the direction of the main data flow.</p>
+          <p class="hint">Click a component for details. The diagram scales with the viewport.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var descriptions = {
+        developer: {
+          title: "Developer",
+          badge: "github",
+          text: "Creates or updates a pull request on GitHub. This kicks off webhook delivery for PR opened, synchronize, and related events that the app subscribes to."
+        },
+        github: {
+          title: "GitHub",
+          badge: "github",
+          text: "Sends signed webhook payloads to your FastAPI URL. In production this is a public HTTPS endpoint; locally, ngrok exposes your server so GitHub can reach it."
+        },
+        ngrok: {
+          title: "ngrok tunnel",
+          badge: "infra",
+          text: "For local development, forwards HTTPS traffic from a public URL to your FastAPI process so GitHub webhooks can be received without deploying."
+        },
+        fastapi: {
+          title: "FastAPI gateway",
+          badge: "infra",
+          text: "Receives the webhook, verifies the HMAC-SHA256 signature, checks Redis for idempotency using X-GitHub-Delivery, returns 200 OK immediately, and enqueues work to Celery using Redis as the broker."
+        },
+        "redis-idem": {
+          title: "Redis (idempotency)",
+          badge: "infra",
+          text: "Stores seen delivery IDs so duplicate GitHub deliveries do not double-process the same event."
+        },
+        celery: {
+          title: "Celery + Redis broker",
+          badge: "infra",
+          text: "Asynchronous task queue. The API responds fast while workers handle diff fetch, multi-agent review, aggregation, and GitHub API calls."
+        },
+        worker: {
+          title: "Celery worker",
+          badge: "infra",
+          text: "Claims tasks from the queue, exchanges the GitHub App JWT for a short-lived installation access token, and calls the GitHub API to retrieve the PR diff for analysis."
+        },
+        "gh-api-read": {
+          title: "GitHub API (read)",
+          badge: "github",
+          text: "Fetches pull request files and patch content using installation authentication so the agents can review real code changes."
+        },
+        agent1: {
+          title: "Agent 1 — Color & constants",
+          badge: "ai",
+          text: "Claude agent focused on hardcoded colors, magic numbers, design tokens, and consistency with UI conventions."
+        },
+        agent2: {
+          title: "Agent 2 — Logic & bugs",
+          badge: "ai",
+          text: "Claude agent focused on null checks, race conditions, edge cases, and correctness risks in the diff."
+        },
+        agent3: {
+          title: "Agent 3 — Best practices",
+          badge: "ai",
+          text: "Claude agent focused on SRP, naming, nesting depth, and error-handling patterns."
+        },
+        agent4: {
+          title: "Agent 4 — Security",
+          badge: "ai",
+          text: "Claude agent focused on OWASP-style issues: XSS, injection, unsafe deserialization, and secrets exposure."
+        },
+        aggregator: {
+          title: "Aggregator",
+          badge: "ai",
+          text: "Combines structured JSON from all four agents, deduplicates overlapping findings, and ranks issues by severity before posting."
+        },
+        "gh-api-write": {
+          title: "GitHub API (write)",
+          badge: "github",
+          text: "Posts batch inline review comments on the pull request so feedback appears in context on specific lines."
+        },
+        postgres: {
+          title: "PostgreSQL (Supabase)",
+          badge: "infra",
+          text: "Persists review records and related metadata for the dashboard and auditing."
+        },
+        "redis-pubsub": {
+          title: "Redis Pub/Sub",
+          badge: "infra",
+          text: "Publishes notifications when a review completes so connected clients can update without polling."
+        },
+        nextjs: {
+          title: "Next.js dashboard",
+          badge: "frontend",
+          text: "Subscribes to server-sent events (SSE) for real-time updates when reviews finish or status changes."
+        },
+        "senior-flow": {
+          title: "Human review comment pipeline",
+          badge: "github",
+          text: "When a senior developer posts a review comment, GitHub emits a webhook. The same FastAPI verification and Celery pipeline run; Claude produces guidance and a fix prompt, and the bot replies on the GitHub thread."
+        }
+      };
+
+      var panel = document.getElementById("detailPanel");
+      var titleEl = document.getElementById("detailTitle");
+      var badgeEl = document.getElementById("detailBadge");
+      var textEl = document.getElementById("detailText");
+
+      function showDetail(id) {
+        var d = descriptions[id];
+        if (!d) return;
+        titleEl.textContent = d.title;
+        badgeEl.textContent =
+          d.badge === "github"
+            ? "GitHub"
+            : d.badge === "ai"
+            ? "Claude / AI"
+            : d.badge === "frontend"
+            ? "Frontend"
+            : "Infrastructure";
+        badgeEl.className = "badge " + d.badge;
+        textEl.textContent = d.text;
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      document.querySelectorAll(".node[data-id]").forEach(function (el) {
+        var nid = el.getAttribute("data-id");
+        var dd = descriptions[nid];
+        el.setAttribute("tabindex", "0");
+        el.setAttribute("role", "button");
+        if (dd) el.setAttribute("aria-label", dd.title + ". Activate for details.");
+        el.addEventListener("click", function () {
+          showDetail(nid);
+        });
+        el.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            showDetail(nid);
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

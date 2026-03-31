@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Code Review Bot — Request Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #07080d;
+      --bg-elevated: #0f1118;
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #e8eaef;
+      --muted: #8b92a8;
+      --blue: #3b8cff;
+      --blue-dim: rgba(59, 140, 255, 0.15);
+      --purple: #b366ff;
+      --purple-dim: rgba(179, 102, 255, 0.15);
+      --green: #34d399;
+      --green-dim: rgba(52, 211, 153, 0.15);
+      --orange: #fb923c;
+      --orange-dim: rgba(251, 146, 60, 0.15);
+      --teal: #2dd4bf;
+      --teal-dim: rgba(45, 212, 191, 0.15);
+      --danger: #f87171;
+      --diamond: #94a3b8;
+      --line: rgba(148, 163, 184, 0.45);
+      --pulse-glow: rgba(59, 140, 255, 0.55);
+      --font-display: "Syne", system-ui, sans-serif;
+      --font-body: "Outfit", system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+
+    .noise {
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      opacity: 0.04;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      z-index: 0;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    header h1 {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(1.65rem, 4vw, 2.35rem);
+      letter-spacing: -0.03em;
+      margin: 0 0 0.5rem;
+      background: linear-gradient(135deg, #fff 0%, #a5b4fc 50%, #7dd3fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    .toolbar button {
+      font-family: var(--font-body);
+      font-weight: 600;
+      font-size: 0.875rem;
+      padding: 0.65rem 1.25rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      color: var(--text);
+      cursor: pointer;
+      transition: transform 0.15s ease, border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .toolbar button:hover {
+      border-color: rgba(59, 140, 255, 0.5);
+      box-shadow: 0 0 24px rgba(59, 140, 255, 0.2);
+    }
+
+    .toolbar button:active {
+      transform: scale(0.98);
+    }
+
+    .toolbar button.primary {
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-color: transparent;
+      color: #fff;
+    }
+
+    .toolbar button.primary:hover {
+      box-shadow: 0 0 28px rgba(124, 58, 237, 0.45);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      justify-content: center;
+      margin-bottom: 2rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .dot.api { background: var(--blue); box-shadow: 0 0 10px var(--blue); }
+    .dot.ai { background: var(--purple); box-shadow: 0 0 10px var(--purple); }
+    .dot.gh { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .dot.db { background: var(--orange); box-shadow: 0 0 10px var(--orange); }
+    .dot.rt { background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+
+    .flow {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+
+    .connector {
+      width: 4px;
+      height: 36px;
+      position: relative;
+      overflow: visible;
+    }
+
+    .connector.thin {
+      height: 24px;
+    }
+
+    .connector svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .connector .dash-line {
+      stroke: var(--line);
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-dasharray: 6 10;
+      animation: svgDashFlow 1.1s linear infinite;
+    }
+
+    @keyframes svgDashFlow {
+      to {
+        stroke-dashoffset: -32;
+      }
+    }
+
+    @keyframes splitGlow {
+      0%,
+      100% {
+        opacity: 0.85;
+        border-color: rgba(148, 163, 184, 0.35);
+      }
+      50% {
+        opacity: 1;
+        border-color: rgba(59, 140, 255, 0.45);
+      }
+    }
+
+    .flow-step {
+      width: 100%;
+      max-width: 520px;
+      padding: 1rem 1.15rem;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+      backdrop-filter: blur(8px);
+      transition: transform 0.25s ease, box-shadow 0.35s ease, border-color 0.25s ease;
+      cursor: default;
+      position: relative;
+      --step-accent: var(--blue);
+      --step-glow: var(--blue-dim);
+    }
+
+    .flow-step::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 14px;
+      padding: 1px;
+      background: linear-gradient(135deg, transparent, rgba(255,255,255,0.06));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+
+    .flow-step:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--step-accent) 45%, transparent);
+    }
+
+    .flow-step.api { --step-accent: var(--blue); --step-glow: var(--blue-dim); }
+    .flow-step.ai { --step-accent: var(--purple); --step-glow: var(--purple-dim); }
+    .flow-step.gh { --step-accent: var(--green); --step-glow: var(--green-dim); }
+    .flow-step.db { --step-accent: var(--orange); --step-glow: var(--orange-dim); }
+    .flow-step.rt { --step-accent: var(--teal); --step-glow: var(--teal-dim); }
+
+    .flow-step .row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.85rem;
+    }
+
+    .step-num {
+      flex-shrink: 0;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1rem;
+      background: var(--step-glow);
+      color: var(--step-accent);
+      border: 1px solid color-mix(in srgb, var(--step-accent) 35%, transparent);
+    }
+
+    .flow-step h3 {
+      margin: 0 0 0.35rem;
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.02em;
+    }
+
+    .flow-step p {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .flow-step.active {
+      animation: stepPulse 1.1s ease-out;
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--step-accent) 50%, transparent),
+        0 0 40px var(--step-glow),
+        0 12px 40px rgba(0,0,0,0.35);
+    }
+
+    @keyframes stepPulse {
+      0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--step-accent) 0%, transparent);
+      }
+      35% {
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--step-accent) 55%, transparent),
+          0 0 48px var(--step-glow);
+      }
+      100% {
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--step-accent) 25%, transparent),
+          0 0 24px var(--step-glow);
+      }
+    }
+
+    .flow-step.active .step-num {
+      animation: numPulse 1.1s ease-out;
+    }
+
+    @keyframes numPulse {
+      0%, 100% { transform: scale(1); }
+      40% { transform: scale(1.08); }
+    }
+
+    /* Tooltip */
+    .flow-step[data-tip]:hover::after,
+    .decision[data-tip]:hover::after,
+    .agent-card[data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 12px);
+      transform: translateX(-50%);
+      width: min(340px, calc(100vw - 2rem));
+      padding: 0.75rem 0.9rem;
+      border-radius: 10px;
+      background: #1a1d28;
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      z-index: 20;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+      pointer-events: none;
+      animation: tipIn 0.2s ease;
+    }
+
+    @keyframes tipIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    /* Decision diamond */
+    .decision-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    .decision {
+      width: 168px;
+      height: 168px;
+      display: grid;
+      place-items: center;
+      transform: rotate(45deg);
+      border-radius: 16px;
+      border: 2px solid color-mix(in srgb, var(--diamond) 60%, transparent);
+      background: linear-gradient(135deg, rgba(148,163,184,0.12), rgba(148,163,184,0.04));
+      position: relative;
+      transition: box-shadow 0.3s, border-color 0.3s;
+    }
+
+    .decision-inner {
+      transform: rotate(-45deg);
+      text-align: center;
+      padding: 0.5rem;
+      max-width: 130px;
+    }
+
+    .decision strong {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 0.82rem;
+      margin-bottom: 0.25rem;
+      color: #e2e8f0;
+    }
+
+    .decision span {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    .decision.active {
+      animation: stepPulse 1.1s ease-out;
+      border-color: var(--blue);
+      box-shadow: 0 0 32px rgba(59, 140, 255, 0.25);
+    }
+
+    .branch-row {
+      display: flex;
+      width: 100%;
+      max-width: 520px;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+      min-height: 72px;
+      position: relative;
+    }
+
+    .branch {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .branch-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .branch.no .branch-label { color: var(--danger); }
+    .branch.yes .branch-label { color: var(--green); }
+
+    .mini-card {
+      width: 100%;
+      padding: 0.5rem 0.6rem;
+      border-radius: 10px;
+      font-size: 0.75rem;
+      text-align: center;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.25);
+      color: var(--muted);
+    }
+
+    .mini-card.danger {
+      border-color: rgba(248, 113, 113, 0.4);
+      color: #fecaca;
+    }
+
+    .mini-card.ok {
+      border-color: rgba(52, 211, 153, 0.35);
+      color: #a7f3d0;
+    }
+
+    .merge-hint {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+      margin: 0.25rem 0 0.5rem;
+      max-width: 420px;
+    }
+
+    /* Parallel agents */
+    .parallel-block {
+      width: 100%;
+      max-width: 720px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .parallel-split {
+      width: 80%;
+      height: 28px;
+      border: 2px dashed var(--line);
+      border-bottom: none;
+      border-radius: 16px 16px 0 0;
+      position: relative;
+      animation: splitGlow 2.4s ease-in-out infinite;
+    }
+
+    .parallel-split::after {
+      content: "";
+      position: absolute;
+      bottom: -2px;
+      left: 50%;
+      width: 2px;
+      height: 20px;
+      background: var(--line);
+      transform: translateX(-50%);
+    }
+
+    .agents-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.65rem;
+      width: 100%;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 700px) {
+      .agents-row {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .agent-card {
+      padding: 0.65rem 0.5rem;
+      border-radius: 12px;
+      border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
+      background: var(--purple-dim);
+      text-align: center;
+      font-size: 0.72rem;
+      transition: transform 0.2s, box-shadow 0.3s;
+      position: relative;
+    }
+
+    .agent-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(179, 102, 255, 0.2);
+    }
+
+    .agent-card .a-title {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 0.78rem;
+      color: #e9d5ff;
+      margin-bottom: 0.35rem;
+      line-height: 1.2;
+    }
+
+    .agent-card.active {
+      animation: stepPulse 1.1s ease-out;
+      --step-accent: var(--purple);
+      --step-glow: var(--purple-dim);
+    }
+
+    .parallel-join {
+      width: 80%;
+      height: 28px;
+      border: 2px dashed var(--line);
+      border-top: none;
+      border-radius: 0 0 16px 16px;
+      margin-top: 0.5rem;
+      animation: splitGlow 2.4s ease-in-out infinite 0.4s;
+    }
+
+    .section-title {
+      width: 100%;
+      max-width: 720px;
+      margin: 3rem 0 1.25rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.15rem;
+      color: #c4b5fd;
+      letter-spacing: -0.02em;
+    }
+
+    .secondary-panel {
+      width: 100%;
+      max-width: 520px;
+      padding: 1rem 1.15rem;
+      border-radius: 14px;
+      border: 1px dashed rgba(45, 212, 191, 0.35);
+      background: rgba(45, 212, 191, 0.06);
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .secondary-panel strong {
+      color: var(--teal);
+    }
+
+    footer {
+      margin-top: 3rem;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* SVG overlay for curved connectors (optional enhancement) */
+    .svg-layer {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 0;
+      pointer-events: none;
+      overflow: visible;
+    }
+  </style>
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="wrap">
+    <header>
+      <h1>AI Code Review Bot — Request Flow</h1>
+      <p>End-to-end path from Pull Request open to dashboard notification — plus senior comment handling.</p>
+    </header>
+
+    <div class="toolbar">
+      <button type="button" class="primary" id="btnPlay" aria-pressed="false">▶ Play full flow</button>
+      <button type="button" id="btnReset">Reset highlight</button>
+    </div>
+
+    <div class="legend" aria-hidden="true">
+      <span><i class="dot api"></i> HTTP / API</span>
+      <span><i class="dot ai"></i> AI (Claude agents)</span>
+      <span><i class="dot gh"></i> GitHub</span>
+      <span><i class="dot db"></i> PostgreSQL</span>
+      <span><i class="dot rt"></i> Real-time (SSE)</span>
+    </div>
+
+    <main class="flow" id="mainFlow">
+      <!-- Steps 1-5 -->
+      <article class="flow-step gh" id="s1" data-tip="Triggers when a developer pushes a branch and opens a PR against the default or protected branch. This is the user-visible start of the automation.">
+        <div class="row">
+          <div class="step-num">1</div>
+          <div>
+            <h3>Developer opens PR on GitHub</h3>
+            <p>Pull request created; GitHub prepares to notify configured webhooks.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step gh" id="s2" data-tip="Events: pull_request.opened or synchronize (new commits). For senior guidance, pull_request_review_comment.created can also fire the pipeline or a dedicated handler.">
+        <div class="row">
+          <div class="step-num">2</div>
+          <div>
+            <h3>GitHub fires webhook</h3>
+            <p><code style="font-size:0.82em;color:#a5b4fc;">pull_request.opened</code> / <code style="font-size:0.82em;color:#a5b4fc;">synchronize</code> — or review comments for senior flow.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s3" data-tip="FastAPI exposes POST /webhooks/github. Payload is verified before any heavy work; response must be fast to satisfy GitHub webhook timeouts.">
+        <div class="row">
+          <div class="step-num">3</div>
+          <div>
+            <h3>Webhook hits FastAPI</h3>
+            <p>POST <code style="font-size:0.82em;color:#93c5fd;">/webhooks/github</code></p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s4" data-tip="Compute HMAC-SHA256 of the raw request body with your webhook secret and compare to the X-Hub-Signature-256 header. Invalid → reject immediately (no side effects).">
+        <div class="row">
+          <div class="step-num">4</div>
+          <div>
+            <h3>HMAC-SHA256 signature verification</h3>
+            <p>Reject the request if the signature is invalid.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <div class="decision-wrap">
+        <div class="decision" id="d1" data-tip="Branch after cryptographic verification: invalid signatures never reach idempotency or Celery. Valid payloads continue to Redis deduplication.">
+          <div class="decision-inner">
+            <strong>Signature valid?</strong>
+            <span>HMAC-SHA256</span>
+          </div>
+        </div>
+        <div class="branch-row">
+          <div class="branch no">
+            <span class="branch-label">No</span>
+            <div class="mini-card danger">Reject — invalid signature</div>
+          </div>
+          <div class="branch yes">
+            <span class="branch-label">Yes</span>
+            <div class="mini-card ok">Continue</div>
+          </div>
+        </div>
+      </div>
+      <div class="connector thin" aria-hidden="true"><svg viewBox="0 0 4 24" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="24" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s5" data-tip="X-GitHub-Delivery is a unique id per delivery. Stored in Redis; if seen before, processing is skipped to guarantee at-most-once side effects.">
+        <div class="row">
+          <div class="step-num">5</div>
+          <div>
+            <h3>Redis idempotency check</h3>
+            <p><code style="font-size:0.82em;">X-GitHub-Delivery</code> → skip if already processed.</p>
+          </div>
+        </div>
+      </article>
+
+      <div class="decision-wrap" style="margin-top: 0.5rem;">
+        <div class="decision" id="d2" data-tip="Duplicate deliveries are common. Idempotent handling prevents double review posts and duplicate DB rows.">
+          <div class="decision-inner">
+            <strong>Already processed?</strong>
+            <span>Redis key</span>
+          </div>
+        </div>
+        <div class="branch-row">
+          <div class="branch yes">
+            <span class="branch-label">Yes</span>
+            <div class="mini-card ok">Skip — idempotent exit</div>
+          </div>
+          <div class="branch no">
+            <span class="branch-label">No</span>
+            <div class="mini-card ok">Continue pipeline</div>
+          </div>
+        </div>
+      </div>
+      <p class="merge-hint">Main path continues when signature is valid <em>and</em> delivery is new.</p>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s6" data-tip="GitHub expects a quick 2xx. Heavy work is deferred to Celery so the webhook handler stays within timeout limits.">
+        <div class="row">
+          <div class="step-num">6</div>
+          <div>
+            <h3>Return HTTP 200 immediately</h3>
+            <p>Acknowledge receipt; async work runs out-of-band.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s7" data-tip="process_pr_review is enqueued to the Redis broker. Workers consume from the same Redis instance (or cluster) configured for Celery.">
+        <div class="row">
+          <div class="step-num">7</div>
+          <div>
+            <h3>Queue Celery task</h3>
+            <p><code style="font-size:0.82em;color:#93c5fd;">process_pr_review</code> → Redis broker.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step api" id="s8" data-tip="A Celery worker process picks the task, loads PR metadata from the payload, and begins the review orchestration.">
+        <div class="row">
+          <div class="step-num">8</div>
+          <div>
+            <h3>Celery worker picks up task</h3>
+            <p>Async worker executes the review pipeline.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step gh" id="s9" data-tip="JWT is signed with the GitHub App private key; exchanged for an installation access token scoped to the repository installation.">
+        <div class="row">
+          <div class="step-num">9</div>
+          <div>
+            <h3>GitHub App JWT → installation token</h3>
+            <p>Generate JWT, exchange for installation access token.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step gh" id="s10" data-tip="Uses GitHub REST API to retrieve the PR diff (files, patches) that agents analyze. Large PRs may be paginated or truncated per API limits.">
+        <div class="row">
+          <div class="step-num">10</div>
+          <div>
+            <h3>Fetch PR diff</h3>
+            <p>GitHub API returns changed files and patches for review.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <!-- Step 11 parallel -->
+      <article class="flow-step ai" id="s11" data-tip="Four specialized prompts/agents run concurrently via asyncio.gather to minimize wall-clock latency. Each returns structured JSON issues.">
+        <div class="row">
+          <div class="step-num">11</div>
+          <div>
+            <h3>Run 4 Claude agents in parallel</h3>
+            <p><code style="font-size:0.82em;color:#d8b4fe;">asyncio.gather</code> — concurrent analysis.</p>
+          </div>
+        </div>
+      </article>
+      <div class="parallel-block">
+        <div class="parallel-split" aria-hidden="true"></div>
+        <div class="agents-row">
+          <div class="agent-card" id="a1" data-tip="Flags hardcoded colors, magic numbers, and design-token violations. Output: JSON issue list."> <div class="a-title">Color &amp; Constants</div> JSON issues </div>
+          <div class="agent-card" id="a2" data-tip="Finds control-flow mistakes, edge cases, and probable bugs. Output: JSON issue list."> <div class="a-title">Logic &amp; Bugs</div> JSON issues </div>
+          <div class="agent-card" id="a3" data-tip="Style, readability, patterns, and framework-idiomatic suggestions. Output: JSON issue list."> <div class="a-title">Best Practices</div> JSON issues </div>
+          <div class="agent-card" id="a4" data-tip="OWASP-oriented checks: secrets, injection, auth gaps. Output: JSON issue list."> <div class="a-title">Security</div> JSON issues </div>
+        </div>
+        <div class="parallel-join" aria-hidden="true"></div>
+      </div>
+      <div class="connector thin" aria-hidden="true"><svg viewBox="0 0 4 24" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="24" fill="none" /></svg></div>
+
+      <article class="flow-step ai" id="s12" data-tip="Merges overlapping findings, dedupes by file/line/similarity, and ranks by severity and confidence.">
+        <div class="row">
+          <div class="step-num">12</div>
+          <div>
+            <h3>Aggregator</h3>
+            <p>Combine + deduplicate + rank issues.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step ai" id="s13" data-tip="For each retained issue, generate an actionable fix prompt suitable for inline review comments (and optional copy for the author).">
+        <div class="row">
+          <div class="step-num">13</div>
+          <div>
+            <h3>Generate fix prompts</h3>
+            <p>One prompt per issue for inline guidance.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step gh" id="s14" data-tip="Creates review comments attached to specific diff lines, batching where the API allows. User sees fix prompts in the PR UI.">
+        <div class="row">
+          <div class="step-num">14</div>
+          <div>
+            <h3>POST batch review to GitHub</h3>
+            <p>Inline comments with fix prompts on the PR.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step db" id="s15" data-tip="Persist review run, issues, and metadata for the dashboard, analytics, and audit trail.">
+        <div class="row">
+          <div class="step-num">15</div>
+          <div>
+            <h3>Save to PostgreSQL</h3>
+            <p>Review + issues stored in the database.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step rt" id="s16" data-tip="Publishes a lightweight event on a Redis channel so subscribers (API layer) can push updates without polling the DB.">
+        <div class="row">
+          <div class="step-num">16</div>
+          <div>
+            <h3>Redis Pub/Sub notification</h3>
+            <p>Publish event for connected clients.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+
+      <article class="flow-step rt" id="s17" data-tip="Dashboard opens an SSE stream; on event, UI updates review list or detail in real time without refresh.">
+        <div class="row">
+          <div class="step-num">17</div>
+          <div>
+            <h3>Dashboard SSE → real-time UI</h3>
+            <p>Server-Sent Events deliver updates to the UI instantly.</p>
+          </div>
+        </div>
+      </article>
+    </main>
+
+    <h2 class="section-title">Secondary flow — Senior review comments</h2>
+    <p class="secondary-panel">
+      When a <strong>senior developer posts a PR review comment</strong>, GitHub sends
+      <code style="color:#a5b4fc;">pull_request_review_comment.created</code>. The same webhook endpoint can route to a dedicated task that generates guidance and replies on-thread.
+    </p>
+
+    <div class="flow" id="secondaryFlow">
+      <article class="flow-step gh" id="sf1" data-tip="Fired when a review comment is created on a diff line. Payload includes comment body, path, and position.">
+        <div class="row">
+          <div class="step-num">S1</div>
+          <div>
+            <h3>Senior posts review comment</h3>
+            <p>GitHub event: <code style="font-size:0.82em;">pull_request_review_comment.created</code></p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+      <article class="flow-step api" id="sf2" data-tip="Same HMAC and idempotency rules as the main PR flow.">
+        <div class="row">
+          <div class="step-num">S2</div>
+          <div>
+            <h3>Webhook → FastAPI</h3>
+            <p><code style="font-size:0.82em;">/webhooks/github</code> verifies and enqueues.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+      <article class="flow-step api" id="sf3" data-tip="Dedicated Celery task: load context (diff, thread), call Claude with senior’s comment as input, produce suggested guidance.">
+        <div class="row">
+          <div class="step-num">S3</div>
+          <div>
+            <h3><code style="font-size:0.9em;color:#93c5fd;">process_senior_comments</code> task</h3>
+            <p>Worker runs targeted analysis &amp; reply generation.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+      <article class="flow-step ai" id="sf4" data-tip="Model turns the senior’s note into concrete guidance, coding suggestions, or follow-up checks for the author.">
+        <div class="row">
+          <div class="step-num">S4</div>
+          <div>
+            <h3>Claude generates guidance</h3>
+            <p>Structured response for the comment thread.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+      <article class="flow-step gh" id="sf5" data-tip="Posts a reply via GitHub API (or review comment) so the author sees it in the PR conversation.">
+        <div class="row">
+          <div class="step-num">S5</div>
+          <div>
+            <h3>Reply on GitHub</h3>
+            <p>Bot comment appears on the thread.</p>
+          </div>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"><svg viewBox="0 0 4 36" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><line class="dash-line" x1="2" y1="0" x2="2" y2="36" fill="none" /></svg></div>
+      <article class="flow-step db" id="sf6" data-tip="Stores the exchange for dashboard history and optional notification fan-out.">
+        <div class="row">
+          <div class="step-num">S6</div>
+          <div>
+            <h3>Save to PostgreSQL</h3>
+            <p>Persist thread metadata and bot reply.</p>
+          </div>
+        </div>
+      </article>
+    </div>
+
+    <footer>AI Code Review Bot — interactive flow diagram · hover steps for details</footer>
+  </div>
+
+  <script>
+(function () {
+  const sequence = [
+    { id: "s1" },
+    { id: "s2" },
+    { id: "s3" },
+    { id: "s4" },
+    { id: "d1", type: "decision" },
+    { id: "s5" },
+    { id: "d2", type: "decision" },
+    { id: "s6" },
+    { id: "s7" },
+    { id: "s8" },
+    { id: "s9" },
+    { id: "s10" },
+    { id: "s11" },
+    { parallel: ["a1", "a2", "a3", "a4"] },
+    { id: "s12" },
+    { id: "s13" },
+    { id: "s14" },
+    { id: "s15" },
+    { id: "s16" },
+    { id: "s17" },
+    { id: "sf1" },
+    { id: "sf2" },
+    { id: "sf3" },
+    { id: "sf4" },
+    { id: "sf5" },
+    { id: "sf6" },
+  ];
+
+  function clearActive() {
+    document.querySelectorAll(".flow-step.active, .decision.active, .agent-card.active").forEach(function (el) {
+      el.classList.remove("active");
+    });
+  }
+
+  function activate(id) {
+    clearActive();
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add("active");
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  let playTimer = null;
+  const STEP_MS = 650;
+
+  function playFullFlow() {
+    if (playTimer) {
+      clearTimeout(playTimer);
+      playTimer = null;
+    }
+    clearActive();
+    let i = 0;
+    const btn = document.getElementById("btnPlay");
+    btn.setAttribute("aria-pressed", "true");
+    btn.textContent = "… Playing";
+
+    function next() {
+      if (i >= sequence.length) {
+        btn.setAttribute("aria-pressed", "false");
+        btn.textContent = "▶ Play full flow";
+        playTimer = null;
+        return;
+      }
+      const item = sequence[i];
+      if (item.parallel) {
+        clearActive();
+        item.parallel.forEach(function (pid) {
+          var el = document.getElementById(pid);
+          if (el) el.classList.add("active");
+        });
+        var first = document.getElementById(item.parallel[0]);
+        if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else {
+        activate(item.id);
+      }
+      i += 1;
+      playTimer = setTimeout(next, STEP_MS);
+    }
+    next();
+  }
+
+  document.getElementById("btnPlay").addEventListener("click", playFullFlow);
+  document.getElementById("btnReset").addEventListener("click", function () {
+    if (playTimer) {
+      clearTimeout(playTimer);
+      playTimer = null;
+    }
+    clearActive();
+    const btn = document.getElementById("btnPlay");
+    btn.setAttribute("aria-pressed", "false");
+    btn.textContent = "▶ Play full flow";
+  });
+
+})();
+  </script>
+</body>
+</html>
